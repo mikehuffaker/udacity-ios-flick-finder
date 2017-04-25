@@ -160,6 +160,8 @@ class ViewController: UIViewController
                 performUIUpdatesOnMain
                 {
                     self.setUIEnabled( true )
+                    self.photoTitleLabel.text = "No photo returned. Try again."
+                    self.photoImageView.image = nil
                 }
             }
             
@@ -197,8 +199,6 @@ class ViewController: UIViewController
                 return
             }
             
-            print( "JSON Parsed Result: \(parsedResult)" )
-            
             // Check for error from Flickr
             guard let stat = parsedResult[Constants.FlickrResponseKeys.Status] as? String,
                       stat == Constants.FlickrResponseValues.OKStatus
@@ -208,67 +208,160 @@ class ViewController: UIViewController
                 return
             }
             
-            // GUARD: Are the "photos" and "photo" keys in our result?
-            guard let photosDictionary = parsedResult[Constants.FlickrResponseKeys.Photos] as? [String:AnyObject],
-                  let photoArray = photosDictionary[Constants.FlickrResponseKeys.Photo] as? [[String:AnyObject]]
-            else
+            guard let photosDictionary = parsedResult[Constants.FlickrResponseKeys.Photos] as? [String:AnyObject]            else
             {
-                displayError( "Cannot find keys '\(Constants.FlickrResponseKeys.Photos)' and '\(Constants.FlickrResponseKeys.Photo)' in \(parsedResult)" )
+                displayError( "Cannot find key '\(Constants.FlickrResponseKeys.Photos)' \(parsedResult)" )
                 return
             }
             
-            print( "getting random index" )
-            let randomPhotoIndex = Int(arc4random_uniform(UInt32((photoArray.count))))
-            print( "random index is: ", randomPhotoIndex )
-            let photoDictionaryRandom = photoArray[randomPhotoIndex] as [String:AnyObject]
-            
-            // Check for url_m key/value
-            guard let imageUrlString = photoDictionaryRandom[Constants.FlickrResponseKeys.MediumURL] as? String else
-            {
-                displayError( "Cannot find key '\(Constants.FlickrResponseKeys.MediumURL)' in \(photoDictionaryRandom)" )
+            guard let pageCount = photosDictionary[Constants.FlickrResponseKeys.Pages] as? Int else {
+                displayError("Cannot find key '\(Constants.FlickrResponseKeys.Pages)' in \(photosDictionary)")
                 return
             }
+      
+            print( "There were: \(pageCount) pages of photos returned")
             
-            // Check for title
-            guard let photoTitle = photoDictionaryRandom[Constants.FlickrResponseKeys.Title] as? String else
-            {
-                displayError( "Cannot find key '\(Constants.FlickrResponseKeys.Title)' in \(photoDictionaryRandom)" )
-                return
-            }
+            print( "Picking random page" )
+            let maxPage = min( pageCount, 40 )
+            let randomPage = Int(arc4random_uniform(UInt32((maxPage))))
+            print( "Random page is: ", randomPage )
             
-            let imageURL = URL( string: imageUrlString )
-            if let imageData = try? Data( contentsOf: imageURL! )
+            self.displayImageFromFlickrBySearch( methodParameters, pageNumber: randomPage )
+        }
+    
+        task.resume()
+        
+    }
+    
+    // Submit search URL to flickr and retrieve image data - by page number
+    private func displayImageFromFlickrBySearch(_ methodParameters: [String: AnyObject], pageNumber: Int )
+    {
+        var methodParametersWithPageNumber = methodParameters
+        methodParametersWithPageNumber[Constants.FlickrParameterKeys.Page] = pageNumber as AnyObject?
+        
+        // create session and request
+        let session = URLSession.shared
+        let request = URLRequest( url: flickrURLFromParameters(methodParametersWithPageNumber) )
+        
+        print( "URL to send to Flickr is: \(request.url)" )
+        
+        // create network request
+        let task = session.dataTask( with: request )
+        {
+            ( data, response, error ) in
+            
+            // if an error occurs, print it and re-enable the UI
+            func displayError( _ error: String )
             {
+                print( error )
+                print( "URL at time of error: \(request.url)" )
                 performUIUpdatesOnMain
                 {
-                    self.photoImageView.image = UIImage( data: imageData )
-                    self.photoTitleLabel.text = photoTitle
                     self.setUIEnabled( true )
+                    self.photoTitleLabel.text = "No photo returned. Try again."
+                    self.photoImageView.image = nil
                 }
+            }
+            
+            // Check for error value returned
+            guard ( error == nil ) else
+            {
+                displayError( "There was an error with the request: \(error?.localizedDescription)" )
+                return
+            }
+            
+            // Check for 2XX non-error response
+            guard let statusCode = ( response as? HTTPURLResponse )?.statusCode,
+                statusCode >= 200 && statusCode <= 299
+                else
+            {
+                displayError( "Your request returned a status code other than 2xx!" )
+                return
+            }
+            
+            // Check for data null value
+            guard let data = data else
+            {
+                displayError( "No data was returned by the request!" )
+                return
+            }
+            
+            let parsedResult: [String:AnyObject]!
+            do
+            {
+                parsedResult = try JSONSerialization.jsonObject(with: data, options: .allowFragments) as! [String:AnyObject]
+                
+            } catch
+            {
+                displayError( "Could not parse the data as JSON: '\(data)'" )
+                return
+            }
+            
+            print( "JSON Parsed Result: \(parsedResult)" )
+            
+            // Check for error from Flickr
+            guard let stat = parsedResult[Constants.FlickrResponseKeys.Status] as? String,
+                stat == Constants.FlickrResponseValues.OKStatus
+                else
+            {
+                displayError( "Flickr API returned an error. See error code and message in \(parsedResult)" )
+                return
+            }
+            
+            guard let photosDictionary = parsedResult[Constants.FlickrResponseKeys.Photos] as? [String:AnyObject]            else
+            {
+                displayError( "Cannot find key '\(Constants.FlickrResponseKeys.Photos)' \(parsedResult)" )
+                return
+            }
+
+            guard let photosArray = photosDictionary[Constants.FlickrResponseKeys.Photo] as? [[String:AnyObject]]            else
+            {
+                displayError( "Cannot find key '\(Constants.FlickrResponseKeys.Photo)' \(photosDictionary)" )
+                return
+            }
+            
+            if photosArray.count < 1
+            {
+                displayError( "No photos were found, search again" )
+                return
             }
             else
             {
-                displayError( "Image does not exist at URL: \(imageURL)" )
-            }
+                print( "getting random index" )
+                let randomPhotoIndex = Int(arc4random_uniform(UInt32((photosArray.count))))
+                print( "random index is: ", randomPhotoIndex )
+                let photoDictionaryRandom = photosArray[randomPhotoIndex] as [String:AnyObject]
+                let photoTitle = photoDictionaryRandom[Constants.FlickrResponseKeys.Title] as? String
             
-            //if error == nil
-            //{
-            //    print( "Response Received:" )
-            //    print( data as AnyObject )
-            //}
-            //else
-            //{
-            //    print( "Error Occurred:" )
-            //    print( error!.localizedDescription )
-            //}
-            self.setUIEnabled( true )
+                /* GUARD: Does our photo have a key for 'url_m'? */
+                guard let imageUrlString = photoDictionaryRandom[Constants.FlickrResponseKeys.MediumURL] as? String else
+                {
+                    displayError("Cannot find key '\(Constants.FlickrResponseKeys.MediumURL)' in \(photoDictionaryRandom)")
+                    return
+                }
+            
+                // if an image exists at the url, set the image and title
+                let imageURL = URL(string: imageUrlString)
+                if let imageData = try? Data(contentsOf: imageURL!)
+                {
+                    performUIUpdatesOnMain
+                    {
+                        self.setUIEnabled(true)
+                        self.photoImageView.image = UIImage(data: imageData)
+                        self.photoTitleLabel.text = photoTitle ?? "(Untitled)"
+                    }
+                }
+                else
+                {
+                    displayError("Image does not exist at \(imageURL)")
+                }
+            }
+
         }
-        
-        print ( "resuming task" )
         
         task.resume()
     }
-    
+
     // MARK: Helper for Creating a URL from Parameters
     
     private func flickrURLFromParameters(_ parameters: [String: AnyObject]) -> URL
